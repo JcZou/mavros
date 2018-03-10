@@ -14,76 +14,91 @@
  * https://github.com/mavlink/mavros/tree/master/LICENSE.md
  */
 
+/* change log: by Jiachi, publish HIL_Actuator from autopilot to simulator */
+
 #include <mavros/mavros_plugin.h>
+#include <pluginlib/class_list_macros.h>
 
 #include <mavros_msgs/ActuatorControl.h>
 
-namespace mavros {
-namespace std_plugins {
+namespace mavplugin {
 /**
  * @brief ActuatorControl plugin
  *
  * Sends actuator controls to FCU controller.
  */
-class ActuatorControlPlugin : public plugin::PluginBase {
+class ActuatorControlPlugin : public MavRosPlugin {
 public:
-	ActuatorControlPlugin() : PluginBase(),
-		nh("~")
-	{ }
+	ActuatorControlPlugin() :
+		nh("~"),
+		uas(nullptr)
+	{ };
 
 	void initialize(UAS &uas_)
 	{
-		PluginBase::initialize(uas_);
+		uas = &uas_;
 
-		target_actuator_control_pub = nh.advertise<mavros_msgs::ActuatorControl>("target_actuator_control", 10);
-		actuator_control_sub = nh.subscribe("actuator_control", 10, &ActuatorControlPlugin::actuator_control_cb, this);
+		//actuator_control_sub = nh.subscribe("actuator_control", 10, &ActuatorControlPlugin::actuator_control_cb, this);
+		actuator_control_pub = nh.advertise<mavros_msgs::ActuatorControl>("actuator_control", 10);
 	}
 
-	Subscriptions get_subscriptions()
-	{
+	const message_map get_rx_handlers() {
 		return {
-			       make_handler(&ActuatorControlPlugin::handle_actuator_control_target),
+			       MESSAGE_HANDLER(MAVLINK_MSG_ID_HIL_ACTUATOR_CONTROLS, &ActuatorControlPlugin::handle_hil_actuator_controls),
 		};
 	}
 
 private:
 	ros::NodeHandle nh;
-
-	ros::Publisher target_actuator_control_pub;
+	UAS *uas;
 	ros::Subscriber actuator_control_sub;
+	ros::Publisher actuator_control_pub;
 
-	/* -*- rx handlers -*- */
+	/* -*- low-level send -*- */
 
-	void handle_actuator_control_target(const mavlink::mavlink_message_t *msg, mavlink::common::msg::ACTUATOR_CONTROL_TARGET &actuator_control_target)
+	//! message definiton here: @p http://mavlink.org/messages/common#SET_ACTUATOR_CONTROL_TARGET
+	void set_actuator_control_target(const uint64_t time_usec,
+			const uint8_t group_mix,
+			const float controls[8])
 	{
-		auto actuator_control_target_msg = boost::make_shared<mavros_msgs::ActuatorControl>();
-		actuator_control_target_msg->header.stamp = m_uas->synchronise_stamp(actuator_control_target.time_usec);
+		mavlink_message_t msg;
 
-		actuator_control_target_msg->group_mix = actuator_control_target.group_mlx;
-		const auto &arr = actuator_control_target.controls;
-		std::copy(arr.cbegin(), arr.cend(), actuator_control_target_msg->controls.begin());
-
-		target_actuator_control_pub.publish(actuator_control_target_msg);
+		mavlink_msg_set_actuator_control_target_pack_chan(UAS_PACK_CHAN(uas), &msg,
+				time_usec,
+				group_mix,
+				UAS_PACK_TGT(uas),
+				controls);
+		UAS_FCU(uas)->send_message(&msg);
 	}
 
 	/* -*- callbacks -*- */
 
 	void actuator_control_cb(const mavros_msgs::ActuatorControl::ConstPtr &req) {
 		//! about groups, mixing and channels: @p https://pixhawk.org/dev/mixing
-		//! message definiton here: @p http://mavlink.org/messages/common#SET_ACTUATOR_CONTROL_TARGET
-		mavlink::common::msg::SET_ACTUATOR_CONTROL_TARGET act{};
+		set_actuator_control_target(ros::Time::now().toNSec() / 1000,
+				req->group_mix,
+				req->controls.data());
+	}
 
-		act.time_usec = req->header.stamp.toNSec() / 1000;
-		act.group_mlx = req->group_mix;
-		act.target_system = m_uas->get_tgt_system();
-		act.target_component = m_uas->get_tgt_component();
-		std::copy(req->controls.begin(), req->controls.end(), act.controls.begin());	// std::array = boost::array
+	/* -*- rx handlers -*- */
 
-		UAS_FCU(m_uas)->send_message_ignore_drop(act);
+	void handle_hil_actuator_controls(const mavlink_message_t *msg, uint8_t sysid, uint8_t compid) {
+		mavlink_hil_actuator_controls_t hil_actuator_controls;
+		mavlink_msg_hil_actuator_controls_decode(msg, &hil_actuator_controls);
+
+		auto hil_actuator_controls_msg = boost::make_shared<mavros_msgs::ActuatorControl>();
+
+		hil_actuator_controls_msg->header.stamp = uas->synchronise_stamp(hil_actuator_controls.time_usec);
+		hil_actuator_controls_msg->group_mix = hil_actuator_controls.flags;	// motor number
+		for(int i = 0 ; i < hil_actuator_controls_msg->group_mix ; i++)
+			hil_actuator_controls_msg->controls[i] = hil_actuator_controls.controls[i];
+
+
+		ROS_INFO("num:%d control:%f %f %f %f", hil_actuator_controls_msg->group_mix, hil_actuator_controls_msg->controls[0], hil_actuator_controls_msg->controls[1],
+				hil_actuator_controls_msg->controls[2], hil_actuator_controls_msg->controls[3]);
+		actuator_control_pub.publish(hil_actuator_controls_msg);
 	}
 };
-}	// namespace std_plugins
-}	// namespace mavros
+};	// namespace mavplugin
 
-#include <pluginlib/class_list_macros.h>
-PLUGINLIB_EXPORT_CLASS(mavros::std_plugins::ActuatorControlPlugin, mavros::plugin::PluginBase)
+PLUGINLIB_EXPORT_CLASS(mavplugin::ActuatorControlPlugin, mavplugin::MavRosPlugin)
