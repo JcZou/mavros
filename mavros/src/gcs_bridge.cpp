@@ -47,7 +47,8 @@ int main(int argc, char *argv[])
 {
 	ros::init(argc, argv, "gcs_bridge");
 	ros::NodeHandle priv_nh("~");
-	ros::NodeHandle mavlink_nh("mavlink");
+	/* JC: use mavlink as namespace */
+	ros::NodeHandle mavlink_nh("/mavlink");
 	diagnostic_updater::Updater updater;
 	mavros::MavlinkDiag gcs_link_diag("GCS bridge");
 

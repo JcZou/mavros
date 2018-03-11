@@ -19,4 +19,10 @@
 		<arg name="tgt_component" value="$(arg tgt_component)" />
 		<arg name="log_output" value="$(arg log_output)" />
 	</include>
+
+	/* launch mavlink_bridge */
+	<include file="$(find mavros)/launch/mavlink_bridge.launch">
+		<arg name="ns" value="iris" />
+		<arg name="mavlink_bridge_url" value="udp://127.0.0.1:14553@127.0.0.1:14550" />
+	</include>
 </launch>
